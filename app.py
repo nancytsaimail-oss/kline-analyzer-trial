@@ -200,10 +200,13 @@ def detect_support_and_resistance_touches(
 
     below_supports = [s for s in support_candidates if s <= last_close * 1.015]
     if below_supports:
-        support_label = f"支撐參考約 {max(below_supports):.2f}"
+        support_price = float(max(below_supports))
+        support_label = f"支撐參考約 {support_price:.2f}"
     elif support_candidates:
-        support_label = f"下方支撐參考約 {min(support_candidates):.2f}（現價略低於參考位）"
+        support_price = float(min(support_candidates))
+        support_label = f"下方支撐參考約 {support_price:.2f}（現價略低於參考位）"
     else:
+        support_price = None
         support_label = "暫無明確支撐參考"
 
     win_start = max(0, n - 25)
@@ -230,6 +233,7 @@ def detect_support_and_resistance_touches(
 
     return {
         "support_label": support_label,
+        "support_price": support_price,
         "double_support": double_support,
         "persistent_resistance": persistent_resistance,
         "res_label": res_label,
@@ -301,14 +305,16 @@ def analyze_structure_and_equal_move(df: pd.DataFrame, box_lookback: int = 20, s
         pattern_label = "一般波段波動（未見明顯急跌V轉或反彈）"
 
     equal_move_notes = []
+    target_up = box_top + box_height if box_height > 0 else None
+    target_dn = max(box_bot - box_height, 0.0) if box_height > 0 else None
     if box_height > 0:
         if last_close > box_top:
-            equal_move_notes.append(f"箱型向上等幅：突破箱頂 {box_top:.2f}，1:1 滿足目標約 {box_top + box_height:.2f}")
+            equal_move_notes.append(f"箱型向上等幅：突破箱頂 {box_top:.2f}，1:1 滿足目標約 {target_up:.2f}")
         elif last_close < box_bot:
-            equal_move_notes.append(f"箱型向下等幅：跌破箱底 {box_bot:.2f}，1:1 滿足目標約 {max(box_bot - box_height, 0.0):.2f}")
+            equal_move_notes.append(f"箱型向下等幅：跌破箱底 {box_bot:.2f}，1:1 滿足目標約 {target_dn:.2f}")
         else:
             equal_move_notes.append(
-                f"箱型等幅預估：向上突破 {box_top:.2f} 約 {box_top + box_height:.2f}；向下跌破 {box_bot:.2f} 約 {max(box_bot - box_height, 0.0):.2f}"
+                f"箱型等幅預估：向上突破 {box_top:.2f} 約 {target_up:.2f}；向下跌破 {box_bot:.2f} 約 {target_dn:.2f}"
             )
 
     if len(pivot_highs) >= 2 and len(pivot_lows_from_low) >= 2:
@@ -326,6 +332,8 @@ def analyze_structure_and_equal_move(df: pd.DataFrame, box_lookback: int = 20, s
         "box_top": box_top,
         "box_bot": box_bot,
         "box_height": box_height,
+        "target_up": target_up,
+        "target_dn": target_dn,
         "box_status": box_status,
         "pattern_label": pattern_label,
         "equal_move_notes": equal_move_notes,
@@ -333,9 +341,25 @@ def analyze_structure_and_equal_move(df: pd.DataFrame, box_lookback: int = 20, s
     }
 
 
+def _place_price_tag(ax, x_pos: float, y_pos: float, text: str, bg_color: str, fg_color: str = "#FFFFFF", dy_offset: float = 0.0):
+    ax.annotate(
+        text,
+        xy=(x_pos, y_pos),
+        xytext=(x_pos, y_pos + dy_offset),
+        ha="center",
+        va="center",
+        fontsize=7.5,
+        fontweight="bold",
+        color=fg_color,
+        bbox=dict(boxstyle="round,pad=0.22", facecolor=bg_color, edgecolor="none", alpha=0.9),
+        arrowprops=dict(arrowstyle="-", color=bg_color, lw=0.8, alpha=0.8) if abs(dy_offset) > 0 else None,
+        zorder=7,
+    )
+
+
 def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbol: str, box_lb: int, show_n: int):
     fig, (ax_price, ax_vol) = plt.subplots(
-        2, 1, figsize=(9, 5.2), sharex=True, gridspec_kw={"height_ratios": [3.2, 1]}
+        2, 1, figsize=(9.6, 5.6), sharex=True, gridspec_kw={"height_ratios": [3.4, 1]}
     )
     n_show = min(show_n, len(df))
     offset = len(df) - n_show
@@ -361,30 +385,75 @@ def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbo
     if sub["MA60"].notna().any():
         ax_price.plot(x, sub["MA60"].to_numpy(dtype=float), label="MA60", linewidth=1.3, color="#7C3AED")
 
+    price_span = max(float(np.max(highs)) - float(np.min(lows)), 1.0)
+    pad_y = price_span * 0.045
+
+    # 1. 顯示區間最高價與最低價（含 $）
+    hi_idx = int(np.argmax(highs))
+    lo_idx = int(np.argmin(lows))
+    hi_val = float(highs[hi_idx])
+    lo_val = float(lows[lo_idx])
+
+    ax_price.scatter([hi_idx], [hi_val], color="#991B1B", marker="v", s=42, zorder=6)
+    _place_price_tag(ax_price, float(hi_idx), hi_val, f"High ${hi_val:.2f}", "#991B1B", dy_offset=pad_y * 0.85)
+
+    ax_price.scatter([lo_idx], [lo_val], color="#166534", marker="^", s=42, zorder=6)
+    _place_price_tag(ax_price, float(lo_idx), lo_val, f"Low ${lo_val:.2f}", "#166534", dy_offset=-pad_y * 0.85)
+
+    # 2. 顯示箱型上下緣與等幅參考價
     box_top, box_bot, box_h = struct["box_top"], struct["box_bot"], struct["box_height"]
+    last_x = float(len(sub) - 1)
     if box_h > 0:
         lb = min(box_lb, len(sub) - 1)
         start_x = max(0, len(sub) - 1 - lb)
-        ax_price.hlines([box_top, box_bot], xmin=start_x, xmax=len(sub) - 1, colors="#0F766E", linestyles="--", linewidth=1.2)
-        ax_price.axhline(box_top + box_h, color="#0F766E", linestyle=":", linewidth=0.9, alpha=0.7)
+        ax_price.hlines([box_top, box_bot], xmin=start_x, xmax=last_x, colors="#0F766E", linestyles="--", linewidth=1.2)
+        _place_price_tag(ax_price, last_x, box_top, f"BoxTop ${box_top:.2f}", "#0F766E", dy_offset=pad_y * 0.45)
+        _place_price_tag(ax_price, last_x, box_bot, f"BoxBot ${box_bot:.2f}", "#0F766E", dy_offset=-pad_y * 0.45)
 
+        if struct["last_close"] > box_top and struct["target_up"] is not None:
+            t_up = float(struct["target_up"])
+            ax_price.axhline(t_up, color="#0D9488", linestyle=":", linewidth=1.0, alpha=0.8)
+            _place_price_tag(ax_price, last_x * 0.85, t_up, f"1:1 Up ${t_up:.2f}", "#0D9488", dy_offset=pad_y * 0.4)
+        elif struct["last_close"] < box_bot and struct["target_dn"] is not None:
+            t_dn = float(struct["target_dn"])
+            ax_price.axhline(t_dn, color="#0D9488", linestyle=":", linewidth=1.0, alpha=0.8)
+            _place_price_tag(ax_price, last_x * 0.85, t_dn, f"1:1 Dn ${t_dn:.2f}", "#0D9488", dy_offset=-pad_y * 0.4)
+
+    # 3. 顯示支撐／雙支撐／持續觸壓點價格
     sr = struct["sr_info"]
     ds = sr["double_support"]
-    if ds and ds["idx1"] >= offset and ds["idx2"] >= offset:
-        p1_x, p2_x = ds["idx1"] - offset, ds["idx2"] - offset
-        ax_price.scatter([p1_x, p2_x], [ds["val1"], ds["val2"]], color="#0284C7", s=36, zorder=5)
-        ax_price.plot([p1_x, p2_x], [ds["val1"], ds["val2"]], color="#0284C7", linestyle="-.", linewidth=1.3)
+    if ds:
+        if ds["idx1"] >= offset and ds["idx2"] >= offset:
+            p1_x, p2_x = float(ds["idx1"] - offset), float(ds["idx2"] - offset)
+            ax_price.scatter([p1_x, p2_x], [ds["val1"], ds["val2"]], color="#0284C7", s=38, zorder=6)
+            ax_price.plot([p1_x, p2_x], [ds["val1"], ds["val2"]], color="#0284C7", linestyle="-.", linewidth=1.3)
+            _place_price_tag(ax_price, p1_x, ds["val1"], f"Sup1 ${ds['val1']:.2f}", "#0284C7", dy_offset=-pad_y * 0.75)
+            _place_price_tag(ax_price, p2_x, ds["val2"], f"Sup2 ${ds['val2']:.2f}", "#0284C7", dy_offset=-pad_y * 0.75)
+        _place_price_tag(ax_price, last_x * 0.5, ds["avg"], f"2-Sup Avg ${ds['avg']:.2f}", "#0369A1", dy_offset=-pad_y * 0.5)
+    elif sr["support_price"] is not None:
+        sup_p = float(sr["support_price"])
+        ax_price.axhline(sup_p, color="#0284C7", linestyle="-.", linewidth=1.0, alpha=0.75)
+        _place_price_tag(ax_price, last_x * 0.55, sup_p, f"Sup ${sup_p:.2f}", "#0284C7", dy_offset=-pad_y * 0.45)
 
     if sr["persistent_resistance"] and sr["touch_indices"]:
-        res_y = sr["res_ref"]
+        res_y = float(sr["res_ref"])
         ax_price.axhline(res_y, color="#B91C1C", linestyle="-.", linewidth=1.1, alpha=0.85)
+        _place_price_tag(ax_price, last_x * 0.7, res_y, f"Res ${res_y:.2f}", "#B91C1C", dy_offset=pad_y * 0.45)
         touch_xs = [idx - offset for idx in sr["touch_indices"] if idx >= offset]
         touch_ys = [float(df["High"].iloc[idx]) for idx in sr["touch_indices"] if idx >= offset]
         if touch_xs:
-            ax_price.scatter(touch_xs, touch_ys, color="#B91C1C", marker="^", s=36, zorder=5)
+            ax_price.scatter(touch_xs, touch_ys, color="#B91C1C", marker="^", s=36, zorder=6)
+
+    # 4. 最新收盤價標籤
+    last_c = float(closes[-1])
+    _place_price_tag(ax_price, last_x, last_c, f"Last ${last_c:.2f}", "#1E293B", dy_offset=0.0)
+
+    # 預留上下空間避免標籤被邊框裁切
+    y_min_cur, y_max_cur = ax_price.get_ylim()
+    ax_price.set_ylim(min(y_min_cur, lo_val - pad_y * 1.8), max(y_max_cur, hi_val + pad_y * 1.8))
 
     code_only = display_name.split()[0] if display_name else symbol
-    ax_price.set_title(f"{code_only} ({symbol}) K-Line & Structure", fontsize=11)
+    ax_price.set_title(f"{code_only} ({symbol}) K-Line & Key Price Levels ($)", fontsize=11)
     ax_price.legend(loc="upper left", fontsize=8)
     ax_price.grid(True, linestyle=":", alpha=0.4)
 
@@ -511,7 +580,7 @@ def main():
                 st.pyplot(fig, use_container_width=True)
 
                 sr = struct["sr_info"]
-                st.subheader(f"分析摘要：{display_name}（最新收盤 {struct['last_close']:.2f}｜單日 {struct['chg_pct']:+.2f}%）")
+                st.subheader(f"分析摘要：{display_name}（最新收盤 ${struct['last_close']:.2f}｜單日 {struct['chg_pct']:+.2f}%）")
                 st.markdown(
                     f"- **波段結構**：{struct['structure_label']}\n"
                     f"- **型態判讀**：{struct['pattern_label']}\n"
