@@ -12,7 +12,7 @@ import yfinance as yf
 from matplotlib.patches import Rectangle
 from PIL import Image
 
-matplotlib.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+matplotlib.rcParams["font.sans-serif"] = ["DejaVu Sans", "Arial", "sans-serif"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,7 +46,6 @@ FALLBACK_STOCKS = {
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_tw_stock_directory() -> dict[str, dict]:
-    # 雲端主機直接採用內建股票清單，避免向證交所/櫃買中心連線逾時卡住
     return dict(FALLBACK_STOCKS)
 
 
@@ -384,7 +383,8 @@ def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbo
         if touch_xs:
             ax_price.scatter(touch_xs, touch_ys, color="#B91C1C", marker="^", s=36, zorder=5)
 
-    ax_price.set_title(f"{display_name}（{symbol}）K線、均線與結構參考", fontsize=11)
+    code_only = display_name.split()[0] if display_name else symbol
+    ax_price.set_title(f"{code_only} ({symbol}) K-Line & Structure", fontsize=11)
     ax_price.legend(loc="upper left", fontsize=8)
     ax_price.grid(True, linestyle=":", alpha=0.4)
 
@@ -392,7 +392,7 @@ def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbo
     ax_vol.bar(x, vols, color=vol_colors, width=0.6, alpha=0.8)
     if sub["VOL5"].notna().any():
         ax_vol.plot(x, sub["VOL5"].to_numpy(dtype=float), color="#2563EB", linewidth=1.1, label="VOL5")
-    ax_vol.set_ylabel("成交量", fontsize=9)
+    ax_vol.set_ylabel("Volume", fontsize=9)
     ax_vol.grid(True, linestyle=":", alpha=0.4)
 
     step = max(1, len(sub) // 8)
