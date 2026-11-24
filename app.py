@@ -46,7 +46,7 @@ FALLBACK_STOCKS = {
 def _parse_isin_table(url: str, market_suffix: str) -> dict[str, dict]:
     result = {}
     headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers, timeout=12)
+    resp = requests.get(url, headers=headers, timeout=4)
     resp.encoding = "big5"
     soup = BeautifulSoup(resp.text, "html.parser")
     for tr in soup.select("table.h4 tr"):
@@ -520,8 +520,6 @@ def main():
                     st.error("密碼錯誤。")
             st.stop()
 
-    stock_dir = fetch_tw_stock_directory()
-
     with st.sidebar:
         st.header("分析設定")
         default_key = st.secrets.get("GEMINI_API_KEY", "") if hasattr(st, "secrets") else ""
@@ -541,6 +539,8 @@ def main():
 
         if st.button("計算指標與結構分析", type="primary"):
             try:
+                with st.spinner("載入股票清單中..."):
+                    stock_dir = fetch_tw_stock_directory()
                 stock_info, _ = resolve_stock_query(query, stock_dir)
                 display_name = f"{stock_info['code']} {stock_info['name']}".strip()
                 with st.spinner(f"正在查詢 {display_name} 行情..."):
