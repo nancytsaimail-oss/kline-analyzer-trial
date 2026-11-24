@@ -16,7 +16,7 @@ matplotlib.rcParams["font.sans-serif"] = ["DejaVu Sans", "Arial", "sans-serif"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_CHOICES = ["gemini-3.8-flash", "gemini-2.5-flash"]
+MODEL_CHOICES = ["gemini-3.8-flash"]
 
 FALLBACK_STOCKS = {
     "2330": {"code": "2330", "name": "台積電", "market": "TW"},
@@ -388,7 +388,6 @@ def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbo
     price_span = max(float(np.max(highs)) - float(np.min(lows)), 1.0)
     pad_y = price_span * 0.045
 
-    # 1. 顯示區間最高價與最低價（含 $）
     hi_idx = int(np.argmax(highs))
     lo_idx = int(np.argmin(lows))
     hi_val = float(highs[hi_idx])
@@ -400,7 +399,6 @@ def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbo
     ax_price.scatter([lo_idx], [lo_val], color="#166534", marker="^", s=42, zorder=6)
     _place_price_tag(ax_price, float(lo_idx), lo_val, f"Low ${lo_val:.2f}", "#166534", dy_offset=-pad_y * 0.85)
 
-    # 2. 顯示箱型上下緣與等幅參考價
     box_top, box_bot, box_h = struct["box_top"], struct["box_bot"], struct["box_height"]
     last_x = float(len(sub) - 1)
     if box_h > 0:
@@ -419,7 +417,6 @@ def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbo
             ax_price.axhline(t_dn, color="#0D9488", linestyle=":", linewidth=1.0, alpha=0.8)
             _place_price_tag(ax_price, last_x * 0.85, t_dn, f"1:1 Dn ${t_dn:.2f}", "#0D9488", dy_offset=-pad_y * 0.4)
 
-    # 3. 顯示支撐／雙支撐／持續觸壓點價格
     sr = struct["sr_info"]
     ds = sr["double_support"]
     if ds:
@@ -444,11 +441,9 @@ def render_chart_figure(df: pd.DataFrame, struct: dict, display_name: str, symbo
         if touch_xs:
             ax_price.scatter(touch_xs, touch_ys, color="#B91C1C", marker="^", s=36, zorder=6)
 
-    # 4. 最新收盤價標籤
     last_c = float(closes[-1])
     _place_price_tag(ax_price, last_x, last_c, f"Last ${last_c:.2f}", "#1E293B", dy_offset=0.0)
 
-    # 預留上下空間避免標籤被邊框裁切
     y_min_cur, y_max_cur = ax_price.get_ylim()
     ax_price.set_ylim(min(y_min_cur, lo_val - pad_y * 1.8), max(y_max_cur, hi_val + pad_y * 1.8))
 
@@ -486,12 +481,13 @@ def prepare_image_bytes(pil_image: Image.Image, max_side: int = 1400) -> bytes:
 
 
 def analyze_image_with_gemini(api_key: str, pil_image: Image.Image, extra_prompt: str, preferred_model: str) -> str:
-    if not api_key.strip():
+    clean_key = api_key.strip()
+    if not clean_key:
         raise ValueError("請先輸入 Gemini API Key。")
     from google import genai
     from google.genai import types
 
-    client = genai.Client(api_key=api_key.strip(), http_options=types.HttpOptions(timeout=45000))
+    client = genai.Client(api_key=clean_key, http_options=types.HttpOptions(timeout=45000))
     img_bytes = prepare_image_bytes(pil_image)
 
     system_instruction = (
@@ -503,30 +499,26 @@ def analyze_image_with_gemini(api_key: str, pil_image: Image.Image, extra_prompt
     if extra_prompt.strip():
         user_text += f"\n補充條件：{extra_prompt.strip()}"
 
-    models_to_try = [m for m in [preferred_model] + MODEL_CHOICES if m]
-    models_to_try = list(dict.fromkeys(models_to_try))
-
+    target_model = (preferred_model or MODEL_CHOICES[0]).strip()
     last_err = None
-    for model_name in models_to_try:
-        for _ in range(2):
-            try:
-                resp = client.models.generate_content(
-                    model=model_name,
-                    contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), user_text],
-                    config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.2),
-                )
-                if resp.text:
-                    return resp.text
-            except Exception as e:
-                last_err = e
-                err_str = str(e)
-                if any(k in err_str for k in ("503", "UNAVAILABLE", "429", "504", "DEADLINE_EXCEEDED", "timed out", "Timeout")):
-                    time.sleep(1.5)
-                    continue
-                if "404" in err_str or "NOT_FOUND" in err_str:
-                    break
-                raise
-    raise RuntimeError(f"模型呼叫失敗：{last_err}")
+    for _ in range(2):
+        try:
+            resp = client.models.generate_content(
+                model=target_model,
+                contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), user_text],
+                config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.2),
+            )
+            if resp.text:
+                return resp.text
+            raise RuntimeError("模型未回傳文字內容，請稍後再試。")
+        except Exception as e:
+            last_err = e
+            err_str = str(e)
+            if any(k in err_str for k in ("503", "UNAVAILABLE", "429", "504", "DEADLINE_EXCEEDED", "timed out", "Timeout")):
+                time.sleep(1.5)
+                continue
+            raise RuntimeError(f"模型（{target_model}）呼叫失敗：{last_err}") from e
+    raise RuntimeError(f"模型（{target_model}）呼叫失敗：{last_err}")
 
 
 def main():
