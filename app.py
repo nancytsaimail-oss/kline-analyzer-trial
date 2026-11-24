@@ -16,7 +16,7 @@ matplotlib.rcParams["font.sans-serif"] = ["DejaVu Sans", "Arial", "sans-serif"]
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_CHOICES = ["gemini-3.8-flash"]
+MODEL_CHOICES = ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
 
 FALLBACK_STOCKS = {
     "2330": {"code": "2330", "name": "台積電", "market": "TW"},
@@ -499,26 +499,34 @@ def analyze_image_with_gemini(api_key: str, pil_image: Image.Image, extra_prompt
     if extra_prompt.strip():
         user_text += f"\n補充條件：{extra_prompt.strip()}"
 
-    target_model = (preferred_model or MODEL_CHOICES[0]).strip()
-    last_err = None
-    for _ in range(2):
-        try:
-            resp = client.models.generate_content(
-                model=target_model,
-                contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), user_text],
-                config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.2),
-            )
-            if resp.text:
-                return resp.text
-            raise RuntimeError("模型未回傳文字內容，請稍後再試。")
-        except Exception as e:
-            last_err = e
-            err_str = str(e)
-            if any(k in err_str for k in ("503", "UNAVAILABLE", "429", "504", "DEADLINE_EXCEEDED", "timed out", "Timeout")):
-                time.sleep(1.5)
-                continue
-            raise RuntimeError(f"模型（{target_model}）呼叫失敗：{last_err}") from e
-    raise RuntimeError(f"模型（{target_model}）呼叫失敗：{last_err}")
+    candidates = [m for m in [preferred_model] + MODEL_CHOICES if m and m.strip()]
+    candidates = list(dict.fromkeys([m.strip() for m in candidates]))
+
+    errors_by_model = []
+    for model_name in candidates:
+        for attempt in range(2):
+            try:
+                resp = client.models.generate_content(
+                    model=model_name,
+                    contents=[types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"), user_text],
+                    config=types.GenerateContentConfig(system_instruction=system_instruction, temperature=0.2),
+                )
+                if resp.text:
+                    return resp.text
+                raise RuntimeError("模型未回傳文字內容")
+            except Exception as e:
+                err_str = str(e)
+                is_busy = any(k in err_str for k in ("503", "UNAVAILABLE", "429", "504", "DEADLINE_EXCEEDED", "timed out", "Timeout"))
+                is_not_found = "404" in err_str or "NOT_FOUND" in err_str
+                if is_busy and attempt == 0:
+                    time.sleep(1.5)
+                    continue
+                errors_by_model.append(f"{model_name}: {err_str}")
+                if is_not_found or is_busy:
+                    break
+                raise RuntimeError(f"模型（{model_name}）呼叫失敗：{err_str}") from e
+
+    raise RuntimeError("所有嘗試的模型目前皆無法完成分析：\n" + "\n".join(errors_by_model))
 
 
 def main():
