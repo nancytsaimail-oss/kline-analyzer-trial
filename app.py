@@ -1,5 +1,4 @@
 import io
-import json
 import os
 import re
 import time
@@ -8,10 +7,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import requests
 import streamlit as st
 import yfinance as yf
-from bs4 import BeautifulSoup
 from matplotlib.patches import Rectangle
 from PIL import Image
 
@@ -19,73 +16,38 @@ matplotlib.rcParams["font.sans-serif"] = ["Microsoft JhengHei", "SimHei", "Arial
 matplotlib.rcParams["axes.unicode_minus"] = False
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-STOCK_CACHE_PATH = os.path.join(BASE_DIR, "tw_stock_list.json")
 MODEL_CHOICES = ["gemini-3.8-flash", "gemini-2.5-flash"]
 
 FALLBACK_STOCKS = {
     "2330": {"code": "2330", "name": "台積電", "market": "TW"},
     "2454": {"code": "2454", "name": "聯發科", "market": "TW"},
+    "2317": {"code": "2317", "name": "鴻海", "market": "TW"},
+    "3711": {"code": "3711", "name": "日月光投控", "market": "TW"},
+    "3037": {"code": "3037", "name": "欣興", "market": "TW"},
+    "8046": {"code": "8046", "name": "南電", "market": "TW"},
+    "2492": {"code": "2492", "name": "華新科", "market": "TW"},
+    "2408": {"code": "2408", "name": "南亞科", "market": "TW"},
+    "5274": {"code": "5274", "name": "信驊", "market": "TWO"},
+    "6515": {"code": "6515", "name": "穎崴", "market": "TWO"},
+    "3163": {"code": "3163", "name": "波若威", "market": "TWO"},
     "2880": {"code": "2880", "name": "華南金", "market": "TW"},
     "2881": {"code": "2881", "name": "富邦金", "market": "TW"},
     "2882": {"code": "2882", "name": "國泰金", "market": "TW"},
     "2884": {"code": "2884", "name": "玉山金", "market": "TW"},
     "2886": {"code": "2886", "name": "兆豐金", "market": "TW"},
     "2891": {"code": "2891", "name": "中信金", "market": "TW"},
+    "2887": {"code": "2887", "name": "台新金", "market": "TW"},
     "0050": {"code": "0050", "name": "元大台灣50", "market": "TW"},
     "0056": {"code": "0056", "name": "元大高股息", "market": "TW"},
     "00878": {"code": "00878", "name": "國泰永續高股息", "market": "TW"},
     "00915": {"code": "00915", "name": "凱基優選高股息30", "market": "TW"},
-    "2317": {"code": "2317", "name": "鴻海", "market": "TW"},
-    "3711": {"code": "3711", "name": "日月光投控", "market": "TW"},
-    "3037": {"code": "3037", "name": "欣興", "market": "TW"},
-    "8046": {"code": "8046", "name": "南電", "market": "TW"},
-    "2492": {"code": "2492", "name": "華新科", "market": "TW"},
 }
-
-
-def _parse_isin_table(url: str, market_suffix: str) -> dict[str, dict]:
-    result = {}
-    headers = {"User-Agent": "Mozilla/5.0"}
-    resp = requests.get(url, headers=headers, timeout=4)
-    resp.encoding = "big5"
-    soup = BeautifulSoup(resp.text, "html.parser")
-    for tr in soup.select("table.h4 tr"):
-        tds = [td.get_text(strip=True) for td in tr.find_all("td")]
-        if len(tds) >= 1:
-            m = re.match(r"^([0-9A-Za-z]{4,6})[\s\u3000]+(.+)$", tds[0])
-            if m:
-                code = m.group(1).strip().upper()
-                name = m.group(2).strip()
-                if code and name:
-                    result[code] = {"code": code, "name": name, "market": market_suffix}
-    return result
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_tw_stock_directory() -> dict[str, dict]:
-    stocks = dict(FALLBACK_STOCKS)
-    if os.path.exists(STOCK_CACHE_PATH):
-        try:
-            with open(STOCK_CACHE_PATH, "r", encoding="utf-8") as f:
-                cached = json.load(f)
-                if isinstance(cached, dict) and len(cached) > 50:
-                    stocks.update(cached)
-        except Exception:
-            pass
-
-    fetched = {}
-    try:
-        fetched.update(_parse_isin_table("https://isin.twse.com.tw/isin/C_public.jsp?strMode=2", "TW"))
-    except Exception:
-        pass
-    try:
-        fetched.update(_parse_isin_table("https://isin.twse.com.tw/isin/C_public.jsp?strMode=4", "TWO"))
-    except Exception:
-        pass
-
-    if len(fetched) > 50:
-        stocks.update(fetched)
-    return stocks
+    # 雲端主機直接採用內建股票清單，避免向證交所/櫃買中心連線逾時卡住
+    return dict(FALLBACK_STOCKS)
 
 
 def resolve_stock_query(query: str, stock_dir: dict[str, dict]) -> tuple[dict, list[dict]]:
@@ -99,6 +61,8 @@ def resolve_stock_query(query: str, stock_dir: dict[str, dict]) -> tuple[dict, l
         if cand_code in stock_dir:
             chosen = stock_dir[cand_code]
             return chosen, [chosen]
+        fallback_info = {"code": cand_code, "name": cand_code, "market": ""}
+        return fallback_info, [fallback_info]
 
     exact_matches = [info for info in stock_dir.values() if info["name"] == q]
     if exact_matches:
@@ -114,12 +78,7 @@ def resolve_stock_query(query: str, stock_dir: dict[str, dict]) -> tuple[dict, l
         fuzzy_matches.sort(key=lambda x: (0 if x["name"].startswith(q) else 1, len(x["code"])))
         return fuzzy_matches[0], fuzzy_matches[:8]
 
-    if re.match(r"^[0-9A-Za-z]{4,6}$", q):
-        code_up = q.upper()
-        fallback_info = {"code": code_up, "name": code_up, "market": ""}
-        return fallback_info, [fallback_info]
-
-    raise ValueError(f"找不到符合「{q}」的股票代號或名稱，請確認輸入內容。")
+    raise ValueError(f"找不到「{q}」，請直接輸入 4～6 碼股票代號（例如 2330、00915）或常用名稱。")
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -134,11 +93,11 @@ def fetch_tw_stock_cached(code: str, name: str, market: str, period: str, interv
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
                 df = df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
-                if len(df) >= 30:
+                if len(df) >= 20:
                     return df, symbol
         except Exception as e:
             last_err = str(e)
-    raise ValueError(f"找不到「{code_up} {name}」的足夠行情資料（{last_err or '請稍後再試'}）。")
+    raise ValueError(f"找不到「{code_up} {name}」的行情資料（{last_err or '請確認代號或稍後再試'}）。")
 
 
 def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -505,7 +464,6 @@ def main():
     st.set_page_config(page_title="K線技術分析與結構等幅工具（試用版）", layout="wide")
     st.title("K線技術分析與結構等幅工具（不公開試用版）")
 
-    # 若有設定試用密碼（建議放在 Streamlit Secrets 的 TRIAL_PASSWORD），則先驗證
     trial_pw = st.secrets.get("TRIAL_PASSWORD", "") if hasattr(st, "secrets") else ""
     if trial_pw:
         if "authed" not in st.session_state:
@@ -539,8 +497,7 @@ def main():
 
         if st.button("計算指標與結構分析", type="primary"):
             try:
-                with st.spinner("載入股票清單中..."):
-                    stock_dir = fetch_tw_stock_directory()
+                stock_dir = fetch_tw_stock_directory()
                 stock_info, _ = resolve_stock_query(query, stock_dir)
                 display_name = f"{stock_info['code']} {stock_info['name']}".strip()
                 with st.spinner(f"正在查詢 {display_name} 行情..."):
